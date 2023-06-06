@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>French gas station map</title>
+        <meta charset="utf-8" />
+        <link rel="stylesheet" href="http://cdn.leafletjs.com/leaflet-0.7/leaflet.css"/>
+        <style>
+            .menu {
+                position: absolute;
+                top: 10px;
+                right: 10px;
+                z-index: 1000;
+                background: white;
+                padding: 10px;
+                /* width: 257px; */
+            }
+            #loading {
+                display: flex;
+                justify-content: center;
+                align-items: center;
+            }
+            .lds-ring {
+                display: inline-block;
+                position: relative;
+                width: 63px;
+                height: 63px;
+            }
+            .lds-ring div {
+                box-sizing: border-box;
+                display: block;
+                position: absolute;
+                width: 44px;
+                height: 44px;
+                margin: 10px;
+                border: 7px solid #ffffff;
+                border-radius: 50%;
+                animation: lds-ring 1.2s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+                border-color: #696969 transparent transparent transparent;
+            }
+            .lds-ring div:nth-child(1) {
+                animation-delay: -0.45s;
+            }
+            .lds-ring div:nth-child(2) {
+                animation-delay: -0.3s;
+            }
+            .lds-ring div:nth-child(3) {
+                animation-delay: -0.15s;
+            }
+            @keyframes lds-ring {
+                0% {
+                    transform: rotate(0deg);
+                }
+                100% {
+                    transform: rotate(360deg);
+                }
+            }
+            #or {
+                position: relative;
+                width: 257px;
+                height: 25px;
+                
+                line-height: 22px;
+                text-align: center;
+            }
+            #or::before,
+            #or::after {
+                position: absolute;
+                width: 115px;
+                height: 1px;
+                
+                top: 12px;
+                
+                background-color: #aaa;
+                
+                content: '';
+            }
+            #or::before {
+                left: 0;
+            }
+            #or::after {
+                right: 0;
+            }
+        </style>
+        <script src="http://cdn.leafletjs.com/leaflet-0.7/leaflet.js"></script>
+    </head>
+    <body style="margin: 0">
+        <div id="map" style="width: 100vw; height: 100vh"></div>
+        <div id="menu" class="leaflet-bar menu">
+            <input id="upload-input" type="file" style="width: 200px" />
+            <button id="upload-button" type="button">Upload</button>
+            <div id="or">or</div>
+            <button id="query-button" type="button" style="width: 100%">Import from Fuseki</button>
+        </div>
+        <div id="loading"  class="leaflet-bar menu" style="z-index: 1001; height: 70px; display: none">
+            <div class="lds-ring"><div></div><div></div><div></div><div></div></div>
+        </div>
+
+        <script>
+            var map = L.map('map').setView([46.612227, 2.469003], 6);
+
+            L.tileLayer(
+                'http://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '&copy; <a href="http://openstreetmap.org">OpenStreetMap</a> Contributors',
+                    maxZoom: 18,
+                }).addTo(map);
+
+            var markerLayer = L.layerGroup();
+
+            const endpointUrl = 'http://localhost:3030/stations/query';
+
+            const query = `PREFIX schema: <http://schema.org/>
+
+            SELECT ?gasStation ?latitude ?longitude (GROUP_CONCAT(DISTINCT ?openingsHoursLine; separator="/") AS ?openingsHours) ?postalCode ?streetAddress ?addressLocality ?addressRegion ?epciName (GROUP_CONCAT(DISTINCT ?gasName; separator=", ") AS ?gasNames) (GROUP_CONCAT(DISTINCT ?gasPrice; separator=", ") AS ?gasPrices) ?services
+            WHERE {
+                ?gasStation a schema:GasStation ;
+                        schema:longitude ?longitude ;
+                        schema:latitude ?latitude ;
+                        schema:openingHours ?openingsHoursLine ;
+       			        schema:hasOfferCatalog ?offerCatalog .
+                OPTIONAL {
+                    ?gasStation schema:address ?addressNode ;
+                            schema:memberOf ?memberOf ;
+                            schema:makesOffer ?offer .
+                    ?addressNode a schema:PostalAddress ;
+                            schema:postalCode ?postalCode ;
+                            schema:streetAddress ?streetAddress ;
+                            schema:addressLocality ?addressLocality ;
+                            schema:addressRegion ?addressRegion .
+                    ?memberOf a schema:Organization ;
+                            schema:name ?epciName .
+                    ?offer a schema:Offer ;
+                            schema:name ?gasName ;
+                            schema:price ?gasPrice .
+                    ?offerCatalog schema:itemListElement ?services .
+                }		
+            }
+            GROUP BY ?gasStation ?latitude ?longitude ?postalCode ?streetAddress ?addressLocality ?addressRegion ?epciName ?gasNames ?gasPrices ?services
+            LIMIT 1000
+            `;
+
+            function addMarkers(markers) {
+                markerLayer.clearLayers();
+                for (const binding of markers.results.bindings) {
+                    let popup = `
+                        <div>
+                            <h3>Gas station ${binding.gasStation.value.split('/').pop()}</h3>
+                            <p>`;
+                    if (typeof binding.streetAddress !== 'undefined') {
+                        popup += `<b>Address:</b><br />${binding.streetAddress.value}, ${binding.postalCode.value} ${binding.addressLocality.value}, ${binding.addressRegion.value}<br /><br />`;
+                    }
+                    popup += `<b>Openings hours:</b><br />${binding.openingsHours.value.split('/').join('<br />')}<br /><br />`;
+                    if (typeof binding.epciName !== 'undefined') {
+                        popup += `<b>EPCI:</b><br />${binding.epciName.value}<br />`;
+                    }
+                    if (typeof binding.gasNames !== 'undefined') {
+                        popup += `<table>
+                                    <tr>
+                                        <th>Gas</th>
+                                        <th>Price</th>
+                                    </tr>
+                                    ${binding.gasNames.value.split(', ').map((gas, index) => `
+                                        <tr>
+                                            <td>${gas}</td>
+                                            <td>${binding.gasPrices.value.split(', ')[index]}€</td>
+                                        </tr>
+                                    `).join('')}
+                                </table>`;
+                    }
+                    if (typeof binding.services !== 'undefined' && binding.services.value !== '') {
+                        popup += `<br /><b>Services:</b><br />${binding.services.value.split('//').join(', ')}<br />`;
+                    }
+                    popup += `</p>
+                        </div>
+                    `;
+                    marker = new L.marker([binding.longitude.value, binding.latitude.value])
+                        .bindPopup(popup)
+                        .addTo(markerLayer);
+                }
+                markerLayer.addTo(map);
+            }
+
+            function toggleMenu() {
+                for (const key of ["menu", "loading"]) {
+                    var x = document.getElementById(key);
+                    if (x.style.display === "none") {
+                        x.style.display = key == "loading" ? "flex" : "block";
+                    } else {
+                        x.style.display = "none";
+                    } 
+                }
+            }
+
+            document.getElementById('query-button').onclick = function() {
+                toggleMenu()
+                fetch(endpointUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: new URLSearchParams({ query }),
+                })
+                .then(response => response.json())
+                .then(data => {
+                    addMarkers(data);
+                })
+                .catch(error => {
+                    console.error(error);
+                })
+                .finally(() => {
+                    toggleMenu();
+                });
+            }
+
+            document.getElementById('upload-button').onclick = function() {
+                toggleMenu()
+                const file = document.getElementById('upload-input').files[0];
+                const reader = new FileReader();
+                reader.onload = function(event) {
+                    const data = event.target.result;
+                    const stations = JSON.parse(data);
+                    addMarkers(stations);
+                    toggleMenu()
+                };
+                reader.readAsText(file);
+            };
+        </script>
+    </body>
+</html>
